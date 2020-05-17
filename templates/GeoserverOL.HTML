@@ -1,0 +1,335 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>openlayer与geoserver交互</title>
+    <link rel="stylesheet" href="{% static 'ol/ol.css'%}">
+    <script src="{% static 'ol/ol.js'%}"></script>
+    <script src="{% static 'jquery-1.7.2.js'%}"></script>
+    <script src="{% static 'jquery.cookie.js'%}"></script>
+    <style type="text/css">
+        #map,
+        html,
+        body {
+            height: 100%;
+            width: 100%;
+        }
+    </style>
+</head>
+
+<body>
+<form class="form-inline">
+  <label>操作方式 &nbsp;</label>
+  <select id="interaction">
+    <option value="search">查看</option>
+    <option value="insert">增加</option>
+    <option value="modify">修改</option>
+    <option value="delete">删除</option>
+  </select>
+  <label>先操作对象，再点击 &nbsp;</label>
+      <input type="button" id="creategml" name="name" value="提交" />
+</form>
+<div id="map"></div>
+<div id="attributetable">
+    <table>
+        <thead>
+        <tr>
+            <th>fid</th>
+            <th>name_py</th>
+            <th>name_ch</th>
+        </tr>
+        </thead>
+        <tbody id="attributetbody">
+        </tbody>
+    </table>
+</div>
+</body>
+<script type="text/javascript">
+    //线上线下访问url不同，可变配置提出
+    var baseurl ='http://localhost:8080/';
+    // 获取坐标系
+    var proj4326=ol.proj.get('EPSG:4326');
+    // 打印坐标系的轴方向，默认的轴方向为neu，生成GML文件，经纬度会是反的
+    console.log(proj4326.getAxisOrientation()); 
+    // 新建坐标系，修改轴方向为enu，经度、纬度、高程
+    var proj = new ol.proj.Projection({  code: 'EPSG:4326',  
+        axisOrientation: 'enu',
+        units:proj4326.getUnits(),
+        canWrapX:true,
+        extent:proj4326.getExtent(),
+        global:true,
+        worldExtent:proj4326.getWorldExtent(),
+    });
+    // 覆盖原来的4326坐标系，目的是为了保证生成GML文件中经纬度不反
+    ol.proj.addProjection(proj);
+    var proj4326new=ol.proj.get('EPSG:4326');
+    console.log(proj4326new);
+
+    //视窗，openlayer默认坐标系是平面墨卡托，设定为WGS84
+    var view = new ol.View({
+        center: [116.400146,40.250184],
+        zoom: 9,
+        projection: 'EPSG:4326',
+    });
+    //图层，加载腾讯底图和geoserver发布的wmts
+    var layers = [
+        new ol.layer.Tile({
+            source: new ol.source.XYZ({
+                url: "http://rt{0-3}.map.gtimg.com/realtimerender?z={z}&x={x}&y={-y}&type=vector&style=0"
+            })
+        }),
+        new ol.layer.Image({
+            source: new ol.source.ImageWMS({
+                ratio: 1,
+                url: '/getwmts?',//这个可以打开geoserver的preview，看openlayer页面截取url
+                // 请求参数
+                params: {
+                    'SERVICE': 'WMS',
+                    'VERSION': '1.1.0',
+                    'REQUEST': 'GetMap',
+                    'FORMAT': 'image/png',
+                    'TRANSPARENT': true,
+                    'tiled': true,
+                    'LAYERS': 'gismap:v6_time_pref_pgn_utf_wgs84_geoserver',//图层，前面是工作空间，后面是图层名，
+                    'exceptions': 'application/vnd.ogc.se_inimage',
+                    'singleTile': true//单瓦片，渲染成一张图片
+                }
+            }),
+        }),
+    ];
+    //地图
+    var map = new ol.Map({
+        target: 'map',
+        layers: layers,
+        view: view
+    });
+    // 添加工具图层，新增、修改、删除选择都在这个图层上进行
+    var source = new ol.source.Vector({ wrapX: false });
+    var vector = new ol.layer.Vector({
+        source: source,
+        style: polygonStyleFunction
+    });
+    map.addLayer(vector);
+    // 仅以绘制面举例
+    var draw = new ol.interaction.Draw({
+            source: source,
+            type: "Polygon"
+    });
+    // 定义选择控件与修改控件
+    var select = new ol.interaction.Select({
+        wrapX: false
+    });
+    var modify = new ol.interaction.Modify({
+        features: select.getFeatures()
+    });
+    // 变化时触发
+    var typeInteraction = document.getElementById('interaction');
+    typeInteraction.onchange = function() {
+            map.removeInteraction(select);
+            map.removeInteraction(modify);
+            map.removeInteraction(draw);
+        if (typeInteraction.value=='insert'){
+            map.addInteraction(draw);
+        }
+        if (typeInteraction.value=='modify'){
+            map.addInteraction(select);
+            map.addInteraction(modify);
+        }
+    };
+
+    // 完成绘制（drawend）时激活
+    draw.once("drawend",function (e) {
+        // draw工具不可用
+        draw.setActive(false);
+        // 属性框
+        var tabletxt='<tr><td>'
+        +'<input type="text" id="fid" value="fid" />'+'</td><td>'
+        +'<input type="text" id="name_py" value="name_py" />'+'</td><td>'
+        +'<input type="text" id="name_ch" value="name_ch" />'+'</td></tr>';
+        $("#attributetbody").append(tabletxt);
+    });
+    // 点击按钮向geoserver提交数据
+    $("#creategml").click(function() {
+        if (typeInteraction.value=='search'){
+            alert('支持insert update delete');
+        }
+        // 获取feature列表
+        var features=source.getFeatures();
+        // 获取一个feature
+        var feature=features[0];
+        var fid=$("#fid").val();
+        var name_py=$("#name_py").val();
+        var name_ch=$("#name_ch").val();
+        // update和delete的时候需要fid
+        feature.setId(fid);
+        feature.set('name_py',name_py);
+        feature.set('name_ch',name_ch);
+        // 创建WFS解析器 
+        var WFSTSerializer = new ol.format.WFS();
+        var insertFeatures=[];
+        var updateFeatures=[];
+        var deleteFeatures=[];
+        if (typeInteraction.value=='insert'){
+            insertFeatures.push(feature);
+        }
+        if (typeInteraction.value=='modify'){
+            var updatefeature=select.getFeatures().getArray()[0];
+            updatefeature.setId(fid);
+            updatefeature.set('name_py',name_py);
+            updatefeature.set('name_ch',name_ch);            
+            updateFeatures.push(updatefeature);
+        }
+        if (typeInteraction.value=='delete'){
+            deleteFeatures.push(feature);
+        }
+        // 格式：writeTransaction(inserts, updates, deletes, options)
+        // updates和deletes都需要要素有唯一ID，进行索引
+        // insert因为是新增，所以不需要
+        var featObject = WFSTSerializer.writeTransaction(insertFeatures,
+            updateFeatures, deleteFeatures, {
+                featureNS: 'http://geoserver/mapgis',//工作区URI
+                featurePrefix: 'gismap',//工作区名称
+                featureType: 'gismap:v6_time_pref_pgn_utf_wgs84_geoserver',//图层名称
+                srsName: 'EPSG:4326',//坐标系
+        });
+        var serializer = new XMLSerializer();
+        var featString = serializer.serializeToString(featObject);
+        // 打印到控制台看看效果，openlayer默认生成的GML中几何字段名为geometry
+        console.log(featString);
+        // 清空属性表
+        $("#attributetable").html('<table><thead><tr><th>fid</th><th>name_py</th><th>name_ch</th></tr></thead><tbody id="attributetbody"></tbody></table>');
+        // 上传到geoserver
+        $.ajax({
+            type: 'POST',
+            url: '/geoserverpost',
+            headers: {"X-CSRFToken": $.cookie('csrftoken')},  // 从Cookie取csrftoken，并设置到请求头中
+            {#contentType:'application/json',#}
+            data: {'gml':featString},
+            {#dataType: 'json',#}
+            success: function(data){
+                source.removeFeature(feature);
+                console.log(data);
+            },
+            error:function(data){
+                source.removeFeature(feature);
+                console.log(data);
+            }
+        });
+    })
+
+    //地图点击事件
+    $("#map").click(function (e) {
+        if (typeInteraction.value=='insert'){
+            return;
+        };
+        if (typeInteraction.value=='modify'){
+            return;
+        };
+        if (typeInteraction.value=='delete'){
+            return;
+        };
+
+        //获取地图上点击的地理坐标，WGS84坐标系
+        var t4326=map.getEventCoordinate(e);
+        //构造请求url
+        var url4326='/getfeature?SERVICE=WMS&VERSION=1.1.1&REQUEST=GetFeatureInfo&FORMAT=image%2Fpng&TRANSPARENT=true&QUERY_LAYERS=gismap%3Av6_time_pref_pgn_utf_wgs84_geoserver&LAYERS=gismap%3Av6_time_pref_pgn_utf_wgs84_geoserver&exceptions=application%2Fvnd.ogc.se_inimage&INFO_FORMAT=application/json&FEATURE_COUNT=50&X=50&Y=50&SRS=EPSG%3A4326&STYLES=&WIDTH=101&HEIGHT=101&BBOX='+(t4326[0]-0.0001).toString()+'%2C'+(t4326[1]-0.0001).toString()+'%2C'+(t4326[0]+0.0001).toString()+'%2C'+(t4326[1]+0.0001).toString();
+        $.ajax(
+            {
+                url:url4326,
+                type:'GET',
+                dataType:'json',
+                headers:{'Content-Type':'application/json;charset=utf8'},
+                success:function(data){
+                    //这个方法直接把geojson转为feature数组
+                    features=(new ol.format.GeoJSON()).readFeatures(data);
+                    // 将feature数组中第一个feature放到source中
+                    source.addFeature(features[0]);
+                    //更新属性表
+                    var fid=data['features'][0]['id'];
+                    var properties=data['features'][0]['properties'];
+                    var name_py=properties['name_py'];
+                    var name_ch=properties['name_ch'];
+                    var tabletxt='<tr><td>'
+                    +'<input type="text" id="fid" value="'+fid+'" />'+'</td><td>'
+                    +'<input type="text" id="name_py" value="'+name_py+'" />'+'</td><td>'
+                    +'<input type="text" id="name_ch" value="'+name_ch+'" />'+'</td></tr>';
+                    $("#attributetbody").append(tabletxt);
+                },
+                error:function(data){
+                    console.log('faile');
+                    console.log(data);
+                }
+            }
+        );
+    });
+    //制图风格，标注内容要从要素中获取，每个要素的name_ch属性不同，所以制图风格是方法，而不是静态的
+    function polygonStyleFunction(feature) {
+        return new ol.style.Style({
+            stroke: new ol.style.Stroke({
+                color: 'rgba(192, 0, 0, 1)',
+                width: 2
+            }),
+            fill: new ol.style.Fill({
+                color: 'rgba(192, 192, 192, 0.5)'
+            }),
+            text: createTextStyle(feature)
+        });
+    };
+    //创建注记
+    function createTextStyle(feature) {
+        return new ol.style.Text({
+            font: '20px Microsoft YaHei',
+            text:  getText(feature),
+            fill: new ol.style.Fill({
+                color: 'rgba(192, 0, 0, 1)'
+            }),
+            stroke: new ol.style.Stroke({color: 'rgba(255, 255, 255, 1)', width: 1}),
+        })
+    };
+    //获取要素属性内容
+    function getText(feature) {
+        if (feature.get('name_ch')){
+            return feature.get('name_ch').toString();            
+        } else{
+            return 'tool';
+        }
+    };
+</script>
+<style type="text/css">
+    #map {
+        width: 100%;
+        height: 100%;
+    }
+    #attributetable {
+        width: 100%;
+        height: 5%;
+        margin: 10px;
+    }
+    table {
+        border-collapse: collapse;
+        border-spacing: 0;
+        border: 1px solid #c0c0c0;
+    }
+    th,td {
+        border: 1px solid #d0d0d0;
+        color: #404060;
+        padding: 10px;
+    }
+    th {
+        background-color: #C00000;
+        font: bold 16px "微软雅黑";
+        color: #fff;
+    }
+    td {
+        font: 14px "微软雅黑";
+    }
+    tbody tr {
+        background-color: #f0f0f0;
+    }
+    tbody tr:hover {
+        cursor: pointer;
+        background-color: #fafafa;
+    }
+</style>
+</html>

@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>django post页面</title>
+</head>
+<body>
+    <form action="/postgml" method="post">
+        {% csrf_token %}
+        <input type="text" name="gml">
+        <input type="submit" value="提交gml">
+    </form>
+    <p>{{ rlt }}</p>
+</body>
+</html>
